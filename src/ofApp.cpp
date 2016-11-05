@@ -5,7 +5,7 @@
 #define DEBUG_ORDER false
 #define DEBUG_WITH_MOUSE false
 #define PRELOAD false
-#define PRINT_FRAMERATE true
+#define PRINT_FRAMERATE false
 
 //--------------------------------------------------------------
 void ofApp::setup(){
@@ -15,7 +15,7 @@ void ofApp::setup(){
   // so there's no need to do that.
 	ofSetVerticalSync(false);
   // ...instead, give ourselves an explicit framerate.
-  ofSetFrameRate(30);
+  ofSetFrameRate(60);
 
 	dir.listDir(VIDEO_DIR);
   // Linux doesn't give us a sorted list

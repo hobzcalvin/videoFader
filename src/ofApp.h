@@ -25,6 +25,9 @@ class ofApp : public ofBaseApp{
     ofVideoPlayer* next;
     // Current index into videos if DEBUG_ORDER is true
     int curVideoIndex;
+    // Used to track video progress which can get stuck
+    float lastTimeLeft;
+    float runningProgress;
 
     ofxOPC opcClient;
 };

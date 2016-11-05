@@ -1,16 +1,21 @@
 #include "ofApp.h"
 
 #define FADE_TIME 2.0
-#define VIDEO_DIR "/Users/grant/Documents/Processing/lovescompany/data/videos/GOODDARK"//"videos"
+#define VIDEO_DIR "videos"
 #define DEBUG_ORDER false
-#define DEBUG_WITH_MOUSE true
+#define DEBUG_WITH_MOUSE false
 #define PRELOAD false
+#define PRINT_FRAMERATE true
 
 //--------------------------------------------------------------
 void ofApp::setup(){
 	ofBackground(0,0,0);
-  // XXX: Nobody knows what this does?!?!
-	ofSetVerticalSync(true);
+  // Very little documentation on here, but "vsync" seems to synchronize
+  // the framerate with the update frequency of the monitor. We have no monitor,
+  // so there's no need to do that.
+	ofSetVerticalSync(false);
+  // ...instead, give ourselves an explicit framerate.
+  ofSetFrameRate(30);
 
 	dir.listDir(VIDEO_DIR);
   // Linux doesn't give us a sorted list
@@ -29,13 +34,22 @@ void ofApp::setup(){
   curVideoIndex = 0;
   current = nextVideo();
   next = NULL;
+  lastTimeLeft = -1;
+  runningProgress = -1;
 
   opcClient.setup("127.0.0.1", 7890);
 }
 
 void ofApp::loadVideo(int dirIndex, ofVideoPlayer& videoObj) {
   cout << "loading " << dir.getPath(dirIndex) << "\n";
-  videoObj.load(dir.getPath(dirIndex));
+  if (PRELOAD) {
+    videoObj.load(dir.getPath(dirIndex));
+  } else {
+    // TODO: Hard to believe this doesn't need more handling,
+    // but it seems to just work and avoid blocking for a half-second
+    // when starting a new video!
+    videoObj.loadAsync(dir.getPath(dirIndex));
+  }
   videoObj.setLoopState(OF_LOOP_NONE);
   videoObj.play();
   videoObj.setVolume(0);
@@ -79,13 +93,28 @@ ofVideoPlayer* ofApp::nextVideo() {
 }
 
 void ofApp::draw(){
-  //XXX
-	ofBackground(0,0,0);
   float timeLeft = current->getDuration() * (1.0 - current->getPosition());
-  //cout << timeLeft << ',' << current->getPosition() << ',' << current->getDuration() << ',' << current->getSpeed() << ',' << current->isPaused() << ',' << current->isPlaying() <<"!\n";
-  // Video is over if it says it's no longer playing or if getPosition()
-  // returns -inf.
-  if ((!current->isPlaying() || isinf(timeLeft))
+  // Annoying complexity to save us from videos that get stuck near their end
+  // without stopping: track lastTimeLeft to track how much the video has
+  // progressed since last draw(). However, sometimes the video hasn't
+  // at all simply because we're draw()ing too fast for its frames. So instead
+  // of a simple timeLeft == lastTimeLeft, accumulate a runningProgress with
+  // lastTimeLeft - timeLeft. That value can be zero for a few draw()s,
+  // but after too long runningProgress dips below our threshold and we decide
+  // the video is stuck and we should move on.
+  if (lastTimeLeft >= 0) {
+    if (runningProgress >= 0) {
+      runningProgress = (runningProgress + lastTimeLeft - timeLeft) / 2.0;
+    } else {
+      runningProgress = lastTimeLeft - timeLeft;
+    }
+  }
+  lastTimeLeft = timeLeft;
+  // Video is over if it says it's no longer playing, or if getPosition()
+  // returns -inf, or if timeLeft is really small,
+  if ((!current->isPlaying() || isinf(timeLeft) || timeLeft < 0.001 ||
+        // or if the video's position hasn't advanced in a while (see above).
+        (runningProgress >= 0 && runningProgress < 0.001))
       // The above tests sometimes trigger falsely (when a video is starting??),
       // so only do this if we have a valid "next"
       && next != NULL) {
@@ -99,11 +128,14 @@ void ofApp::draw(){
       // Delete the old video object to save memory
       // TODO: Would it be better to reuse an existing object with a new
       // video? Or is that asking for memory leaks?
+      current->close();
       delete current;
     }
     current = next;
     next = NULL;
     timeLeft = -1;
+    lastTimeLeft = -1;
+    runningProgress = -1;
   } else if (next == NULL && timeLeft < FADE_TIME) {
     // It's time to start crossfading to the next video; do it!
     next = nextVideo();
@@ -126,7 +158,12 @@ void ofApp::draw(){
   if (!opcClient.isConnected()) {
     // Will continue to try and reconnect to the Pixel Server
     opcClient.tryConnecting();
+    cout << "Not connected!\n";
   } else {
+    // TODO: ofxOPC is kinda silly: it uses 8 64-pixel "channels" to arbitrarily
+    // divide the first 512 pixels of the standard OPC address space and ignores
+    // the rest. Work around this for now by generating 64-pixel output vectors
+    // and sending them for each "channel", though our strands are 50 pixels.
     vector<vector<ofColor>> outputs;
     ofImage grab;
     grab.grabScreen(0, 0, 40, 10);
@@ -134,7 +171,8 @@ void ofApp::draw(){
     for (int panel = 0; panel < 8; panel++) {
       for (int zz = 0; zz < 5; zz++) {
         for (int height = 0; height < 10; height++) {
-          curout.push_back(grab.getColor(panel*5 + zz + (zz % 2 ? 9-height : height)*40));
+          curout.push_back(grab.getColor(panel*5 + zz,
+              zz % 2 ? 9-height : height));
           if (curout.size() == 64) {
             outputs.push_back(curout);
             curout.clear();
@@ -148,6 +186,12 @@ void ofApp::draw(){
     for (int i = 0; i < outputs.size(); i++) {
       opcClient.writeChannel(i+1, outputs[i]);
     }
+  }
+  
+  if (PRINT_FRAMERATE && ofGetFrameNum() % 10 == 0) {
+    cout << "FPS " << ofGetFrameRate() << " remain " << timeLeft
+      << " pos " << current->getPosition() << " len " << current->getDuration()
+      << " runningProgress " << runningProgress << "\n";
   }
 }
 
@@ -174,13 +218,3 @@ void ofApp::mousePressed(int x, int y, int button) {
   }
 }
 
-
-/*
-  // Connect to the local instance of fcserver. You can change this line to connect to another computer's fcserver
-  opc = new OPC(this, "127.0.0.1", 7890);
-  opc.setStatusLed(true);
-  for (int i = 0; i < 8; i++) {
-    //opc.ledGrid(i*50, HEIGHT, 5, width * (0.5 + i) / 8, height/2, width/WIDTH, height/HEIGHT, 3*HALF_PI, true, true);
-    opc.ledGrid((7-i)*50, HEIGHT, 5, width * (0.5 + i) / 8, height/2, width/WIDTH, height/HEIGHT, HALF_PI, true, true);
-  }
-*/
